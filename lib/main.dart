@@ -39,27 +39,32 @@ class MyApp extends StatelessWidget {
 }
 
 class CalculatorModel {
-  String expression = '';
+  String _expression = '';
   String lastResult = '';
   final uid = FirebaseAuth.instance.currentUser?.uid;
 
+  String get expression => _expression;
+  set expression(String val) => _expression = val;
+
   void input(String val) {
-    if (val == '.' && expression.endsWith('.')) return;
-    expression += val;
+    if (val == '.' && _expression.endsWith('.')) return;
+    _expression += val;
   }
 
   void clear() {
-    expression = '';
+    _expression = '';
     lastResult = '';
   }
 
   Future<String> calculate() async {
     try {
-      final parsed = expression
+      final parsed = _expression
           .replaceAll('×', '*')
           .replaceAll('÷', '/')
           .replaceAll('−', '-')
           .replaceAll(',', '.');
+
+      if (parsed.trim().isEmpty) return '';
 
       Parser p = Parser();
       Expression exp = p.parse(parsed);
@@ -71,14 +76,13 @@ class CalculatorModel {
       if (uid != null) {
         await FirebaseFirestore.instance.collection('history').add({
           'userId': uid,
-          'expression': expression,
+          'expression': _expression,
           'result': fixed.toString(),
           'timestamp': FieldValue.serverTimestamp(),
         });
       }
 
-      expression = '';
-      return fixed.toString();
+      return lastResult;
     } catch (e) {
       print("Ошибка при вычислении: $e");
       return 'Ошибка';
@@ -115,17 +119,19 @@ class _MainPageState extends State<MainPage> {
   final TextEditingController kmController = TextEditingController();
   String miles = '0 миль';
   String expression = '';
+  String result = '';
 
   void handleButton(String value) {
     setState(() {
       if (value == 'C') {
         model.clear();
         expression = '';
+        result = '';
       } else if (value == '=') {
-        final currentExpression = model.expression;
-        model.calculate().then((result) {
+        final current = model.expression;
+        model.calculate().then((res) {
           setState(() {
-            expression = '$currentExpression = $result';
+            result = res;
           });
         });
       } else if (value == '±') {
@@ -135,9 +141,9 @@ class _MainPageState extends State<MainPage> {
             final number = match.group(0)!;
             final negated = number.startsWith('-') ? number.substring(1) : '-$number';
             model.expression = model.expression.substring(0, match.start) + negated;
-            expression = model.expression;
           }
         }
+        expression = model.expression;
       } else {
         model.input(value);
         expression = model.expression;
@@ -168,14 +174,22 @@ class _MainPageState extends State<MainPage> {
       children: [
         Container(
           alignment: Alignment.centerRight,
-          padding: EdgeInsets.all(20),
-          margin: EdgeInsets.only(bottom: 20),
+          padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: BoxDecoration(
-            color: Colors.grey[800],
+            color: Colors.grey[850],
             borderRadius: BorderRadius.circular(12),
           ),
-          child: Text(expression.isEmpty ? '0' : expression, style: TextStyle(fontSize: 32, color: Colors.white)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(expression.isEmpty ? '0' : expression,
+                  style: TextStyle(fontSize: 26, color: Colors.white70)),
+              Text(result.isEmpty ? '' : '= $result',
+                  style: TextStyle(fontSize: 32, color: Colors.white, fontWeight: FontWeight.bold)),
+            ],
+          ),
         ),
+        SizedBox(height: 20),
         ...[
           ['C', '±', '%', '÷'],
           ['7', '8', '9', '×'],
@@ -308,7 +322,7 @@ class _MainPageState extends State<MainPage> {
                 },
                 child: Text('Очистить историю'),
               ),
-              SizedBox(height: 10),
+              SizedBox(height: 16),
               ElevatedButton(
                 onPressed: () => setState(() => screen = ScreenType.calculator),
                 child: Text('Назад'),
