@@ -85,4 +85,5 @@ class DefaultFirebaseOptions {
     storageBucket: 'my-calculator-876c4.firebasestorage.app',
     measurementId: 'G-FR8Z6FDK8B',
   );
+
 }

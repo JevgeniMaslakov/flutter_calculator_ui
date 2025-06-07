@@ -2,86 +2,89 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:math_expressions/math_expressions.dart'; // Импорт для математических выражений
-
-import 'firebase_options.dart'; // Импорт сгенерированного файла с конфигурацией Firebase
+import 'package:math_expressions/math_expressions.dart';
+import 'package:intl/intl.dart';
+import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    // Инициализация Firebase с конфигурацией
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,  // Используем конфигурацию для Web и других платформ
-    );
-    await FirebaseAuth.instance.signInAnonymously();
-    print("Firebase успешно инициализирован");
-    runApp(MyApp());
-  } catch (e) {
-    print("Ошибка при инициализации Firebase: $e");
-  }
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await FirebaseAuth.instance.signInAnonymously();
+  runApp(MyApp());
 }
 
-// Перечисление для выбора экрана
 enum ScreenType { calculator, converter, history }
 
-// Главный виджет приложения
 class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Калькулятор и Конвертер',
-      home: MainPage(),  // Главная страница приложения
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: Colors.grey[900],
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.grey[800],
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+      ),
+      home: MainPage(),
+      debugShowCheckedModeBanner: false,
     );
   }
 }
 
-// Модель калькулятора
 class CalculatorModel {
-  String expression = '';  // Храним выражение калькулятора
-  final uid = FirebaseAuth.instance.currentUser!.uid;  // ID пользователя
+  String expression = '';
+  String lastResult = '';
+  final uid = FirebaseAuth.instance.currentUser?.uid;
 
-  // Ввод значения в калькулятор
   void input(String val) {
     if (val == '.' && expression.endsWith('.')) return;
     expression += val;
   }
 
-  // Очистка выражения
   void clear() {
     expression = '';
+    lastResult = '';
   }
 
-  // Метод для вычислений
   Future<String> calculate() async {
     try {
-      // Замена символов для корректных вычислений
       final parsed = expression
           .replaceAll('×', '*')
           .replaceAll('÷', '/')
           .replaceAll('−', '-')
           .replaceAll(',', '.');
 
-      Parser p = Parser();  // Создаём экземпляр Parser
-      Expression exp = p.parse(parsed);  // Парсим выражение
-      ContextModel cm = ContextModel();  // Контекст для вычислений
-      double result = exp.evaluate(EvaluationType.REAL, cm);  // Выполняем вычисления
-      final fixed = double.parse(result.toStringAsFixed(8));  // Округляем результат
+      Parser p = Parser();
+      Expression exp = p.parse(parsed);
+      ContextModel cm = ContextModel();
+      double result = exp.evaluate(EvaluationType.REAL, cm);
+      final fixed = double.parse(result.toStringAsFixed(8));
+      lastResult = fixed.toString();
 
-      // Сохраняем результат в Firestore
-      await FirebaseFirestore.instance.collection('history').add({
-        'userId': uid,
-        'expression': '$expression = $fixed',
-        'timestamp': FieldValue.serverTimestamp(),
-      });
+      if (uid != null) {
+        await FirebaseFirestore.instance.collection('history').add({
+          'userId': uid,
+          'expression': expression,
+          'result': fixed.toString(),
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      }
 
-      return fixed.toString();  // Возвращаем результат
+      expression = '';
+      return fixed.toString();
     } catch (e) {
       print("Ошибка при вычислении: $e");
       return 'Ошибка';
     }
   }
 
-  // Очистка истории вычислений
   Future<void> clearHistory() async {
     final snapshots = await FirebaseFirestore.instance
         .collection('history')
@@ -90,192 +93,228 @@ class CalculatorModel {
     for (var doc in snapshots.docs) {
       await doc.reference.delete();
     }
-    print("История очищена");
   }
 
-  // Поток для получения истории вычислений
   Stream<QuerySnapshot> get historyStream {
     return FirebaseFirestore.instance
         .collection('history')
         .where('userId', isEqualTo: uid)
         .orderBy('timestamp', descending: true)
-        .limit(50) // Ограничиваем количество записей
         .snapshots();
   }
 }
 
-// Главная страница
 class MainPage extends StatefulWidget {
   @override
   State<MainPage> createState() => _MainPageState();
 }
 
 class _MainPageState extends State<MainPage> {
-  ScreenType screen = ScreenType.calculator;  // Текущий экран
-  final CalculatorModel model = CalculatorModel();  // Модель калькулятора
-  final TextEditingController kmController = TextEditingController();  // Контроллер для конвертера
-  String miles = '0 miles';  // Результат конвертации
-  String expression = '';  // Выражение калькулятора
+  ScreenType screen = ScreenType.calculator;
+  final CalculatorModel model = CalculatorModel();
+  final TextEditingController kmController = TextEditingController();
+  String miles = '0 миль';
+  String expression = '';
 
-  // Обработчик кнопок калькулятора
   void handleButton(String value) {
     setState(() {
       if (value == 'C') {
         model.clear();
+        expression = '';
       } else if (value == '=') {
+        final currentExpression = model.expression;
         model.calculate().then((result) {
           setState(() {
-            expression = result;  // Обновляем UI с результатом вычислений
+            expression = '$currentExpression = $result';
           });
         });
+      } else if (value == '±') {
+        if (model.expression.isNotEmpty) {
+          final match = RegExp(r'(\-?\d+\.?\d*)\$').firstMatch(model.expression);
+          if (match != null) {
+            final number = match.group(0)!;
+            final negated = number.startsWith('-') ? number.substring(1) : '-$number';
+            model.expression = model.expression.substring(0, match.start) + negated;
+            expression = model.expression;
+          }
+        }
       } else {
         model.input(value);
+        expression = model.expression;
       }
     });
   }
 
-  // Построение кнопки для калькулятора
   Widget buildButton(String label, {int flex = 1, Color? color}) {
     return Expanded(
       flex: flex,
       child: Padding(
-        padding: const EdgeInsets.all(4),
+        padding: const EdgeInsets.all(6),
         child: ElevatedButton(
           onPressed: () => handleButton(label),
           style: ElevatedButton.styleFrom(
-            backgroundColor: color ?? Colors.white,
-            foregroundColor: Colors.black,
-            padding: const EdgeInsets.symmetric(vertical: 18),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            backgroundColor: color ?? Colors.grey[850],
+            foregroundColor: color != null ? Colors.black : Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 20),
           ),
-          child: Text(label, style: TextStyle(fontSize: 20)),
+          child: Text(label, style: TextStyle(fontSize: 22)),
         ),
       ),
     );
   }
 
-  // Представление экрана калькулятора
   Widget calculatorView() {
     return Column(
       children: [
         Container(
           alignment: Alignment.centerRight,
-          padding: EdgeInsets.all(15),
-          decoration: BoxDecoration(color: Color(0xFFE0E0E0), borderRadius: BorderRadius.circular(10)),
-          child: Text(expression.isEmpty ? '0' : expression, style: TextStyle(fontSize: 28)),
+          padding: EdgeInsets.all(20),
+          margin: EdgeInsets.only(bottom: 20),
+          decoration: BoxDecoration(
+            color: Colors.grey[800],
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(expression.isEmpty ? '0' : expression, style: TextStyle(fontSize: 32, color: Colors.white)),
         ),
-        SizedBox(height: 10),
         ...[
           ['C', '±', '%', '÷'],
           ['7', '8', '9', '×'],
           ['4', '5', '6', '−'],
           ['1', '2', '3', '+'],
         ].map((row) => Row(
-            children: row.map((e) => buildButton(e, color: ['÷','×','−','+','='].contains(e) ? Colors.orange.shade200 : null)).toList()
+          children: row
+              .map((e) => buildButton(e, color: ['÷', '×', '−', '+', '='].contains(e) ? Colors.orangeAccent : null))
+              .toList(),
         )),
         Row(
-            children: [
-              buildButton('0', flex: 2),
-              buildButton('.'),
-              buildButton('=', color: Colors.orange.shade200)
-            ]
+          children: [
+            buildButton('0', flex: 2),
+            buildButton('.'),
+            buildButton('=', color: Colors.orangeAccent),
+          ],
         ),
-        SizedBox(height: 10),
-        ElevatedButton(
-            onPressed: () {
-              setState(() {
-                screen = ScreenType.converter;  // Переход к экрану конвертера
-              });
-            },
-            child: Text('Перейти в Конвертер')
-        ),
-        ElevatedButton(
-            onPressed: () {
-              setState(() {
-                screen = ScreenType.history;  // Переход к экрану истории
-              });
-            },
-            child: Text('Показать Историю')
+        SizedBox(height: 20),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            ElevatedButton(
+              onPressed: () => setState(() => screen = ScreenType.converter),
+              child: Text('Конвертер'),
+            ),
+            ElevatedButton(
+              onPressed: () => setState(() => screen = ScreenType.history),
+              child: Text('История'),
+            ),
+          ],
         ),
       ],
     );
   }
 
-  // Представление экрана конвертера
   Widget converterView() {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(miles, style: TextStyle(fontSize: 24)),
-        SizedBox(height: 10),
-        TextField(
-          controller: kmController,
-          keyboardType: TextInputType.number,
-          decoration: InputDecoration(hintText: 'Введите километры'),
+        SizedBox(height: 40),
+        Center(child: Text(miles, style: TextStyle(fontSize: 26, color: Colors.white))),
+        SizedBox(height: 20),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12.0),
+          child: TextField(
+            controller: kmController,
+            keyboardType: TextInputType.number,
+            style: TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: 'Введите километры',
+              hintStyle: TextStyle(color: Colors.white70),
+              enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white70)),
+              focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white)),
+            ),
+          ),
         ),
-        ElevatedButton(
-          onPressed: () {
-            double? km = double.tryParse(kmController.text);
-            setState(() => miles = km == null ? '0 миль' : '${(km * 0.621371).toStringAsFixed(2)} миль');
-          },
-          child: Text('Конвертировать'),
+        SizedBox(height: 20),
+        Center(
+          child: Column(
+            children: [
+              ElevatedButton(
+                onPressed: () {
+                  double? km = double.tryParse(kmController.text);
+                  setState(() => miles = km == null ? '0 миль' : '${(km * 0.621371).toStringAsFixed(2)} миль');
+                },
+                child: Text('Конвертировать'),
+              ),
+              SizedBox(height: 10),
+              ElevatedButton(
+                onPressed: () => setState(() => screen = ScreenType.calculator),
+                child: Text('Назад'),
+              ),
+            ],
+          ),
         ),
-        ElevatedButton(
-          onPressed: () {
-            setState(() {
-              screen = ScreenType.calculator;  // Назад к калькулятору
-            });
-          },
-          child: Text('Назад к Калькулятору'),
-        )
       ],
     );
   }
 
-  // Представление экрана истории
   Widget historyView() {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('История вычислений', style: TextStyle(fontSize: 20)),
+        Text('История вычислений', style: TextStyle(fontSize: 20, color: Colors.white)),
         SizedBox(height: 10),
         Expanded(
           child: StreamBuilder<QuerySnapshot>(
             stream: model.historyStream,
             builder: (context, snapshot) {
-              if (!snapshot.hasData) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
                 return Center(child: CircularProgressIndicator());
               }
               if (snapshot.hasError) {
-                return Center(child: Text("Ошибка при получении данных: ${snapshot.error}"));
+                return Center(child: Text('Ошибка: ${snapshot.error}'));
               }
-              final docs = snapshot.data!.docs;
+              final docs = snapshot.data?.docs ?? [];
               if (docs.isEmpty) {
-                return Center(child: Text("История пуста"));
+                return Center(child: Text('История пуста', style: TextStyle(color: Colors.white70)));
               }
               return ListView(
-                children: docs
-                    .map((doc) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Text(doc['expression'] ?? ''),
-                ))
-                    .toList(),
+                children: docs.map((doc) {
+                  final timestamp = doc['timestamp'] as Timestamp?;
+                  final formatted = timestamp != null
+                      ? DateFormat('dd.MM.yyyy HH:mm').format(timestamp.toDate())
+                      : '';
+                  final expression = doc['expression'] ?? '';
+                  final result = doc['result'] ?? '';
+                  return Card(
+                    color: Colors.grey[850],
+                    margin: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                    child: ListTile(
+                      title: Text('$expression = $result', style: TextStyle(color: Colors.white)),
+                      subtitle: Text(formatted, style: TextStyle(color: Colors.white70)),
+                    ),
+                  );
+                }).toList(),
               );
             },
           ),
         ),
-        ElevatedButton(
-          onPressed: () async {
-            await model.clearHistory();  // Очистка истории
-            setState(() {});
-          },
-          child: Text('Очистить историю'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            setState(() {
-              screen = ScreenType.calculator;  // Назад к калькулятору
-            });
-          },
-          child: Text('Назад к Калькулятору'),
+        SizedBox(height: 20),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Column(
+            children: [
+              ElevatedButton(
+                onPressed: () async {
+                  await model.clearHistory();
+                  setState(() {});
+                },
+                child: Text('Очистить историю'),
+              ),
+              SizedBox(height: 10),
+              ElevatedButton(
+                onPressed: () => setState(() => screen = ScreenType.calculator),
+                child: Text('Назад'),
+              ),
+            ],
+          ),
         )
       ],
     );
@@ -286,7 +325,7 @@ class _MainPageState extends State<MainPage> {
     return Scaffold(
       body: Center(
         child: Container(
-          width: 320,
+          constraints: BoxConstraints(maxWidth: 380),
           padding: EdgeInsets.all(20),
           child: screen == ScreenType.calculator
               ? calculatorView()
